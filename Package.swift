@@ -75,7 +75,6 @@ let package = Package(
                 .product(name: "MIDIKit", package: "MIDIKit"),
                 .product(name: "CodeEditorView", package: "CodeEditorView"),
                 .product(name: "LanguageSupport", package: "CodeEditorView"),
-                .target(name: "Syphon", condition: .when(platforms: [.macOS])),
             ],
             path: "Fabric",
             exclude: [
@@ -96,16 +95,7 @@ let package = Package(
                 .copy("Materials"),
                 .process("Fabric.xcassets"),
                 .copy("lygia"),
-            ],
-            swiftSettings: [
-                .define("FABRIC_SYPHON_ENABLED", .when(platforms: [.macOS])),
             ]
-        ),
-
-        // Syphon binary target (macOS only)
-        .binaryTarget(
-            name: "Syphon",
-            path: "Frameworks/Syphon.xcframework"
         ),
 
         // Tests
