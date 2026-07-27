@@ -81,14 +81,14 @@ public class GraphRenderer : ViewRenderer
 
     // MARK: - Satin ViewRenderer Lifecycle
 
-    override public func setup() {
-        super.setup()
-        enableExecution(graph: graph)
-        startExecution(graph: graph)
+    override public func setup() throws {
+        try super.setup()
+        try enableExecution(graph: graph)
+        try startExecution(graph: graph)
     }
 
-    override public func update() {
-        super.update()
+    override public func update() throws {
+        try super.update()
 
         let now = CACurrentMediaTime()
         let delta = now - lastGraphExecutionTime
@@ -107,11 +107,11 @@ public class GraphRenderer : ViewRenderer
         updateExecutionPlan()
     }
 
-    override public func cleanup() {
-        stopExecution(graph: graph)
-        disableExecution(graph: graph)
+    override public func cleanup() throws {
+        try stopExecution(graph: graph)
+        try disableExecution(graph: graph)
         teardown(graph: graph)
-        super.cleanup()
+        try super.cleanup()
     }
 
     override public func resize(size: (width: Float, height: Float), scaleFactor: Float)
@@ -125,7 +125,7 @@ public class GraphRenderer : ViewRenderer
 
     // MARK: - Draw
 
-    override public func draw(renderPassDescriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer)
+    override public func draw(renderPassDescriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer) throws
     {
         renderPassDescriptor.colorAttachments[0].loadAction = .clear
         renderPassDescriptor.colorAttachments[0].storeAction = .store
@@ -140,14 +140,12 @@ public class GraphRenderer : ViewRenderer
 
 #if DEBUG
             commandBuffer.pushDebugGroup(node.name)
+            defer { commandBuffer.popDebugGroup() }
 #endif
-            node.execute(renderer: self,
-                         executionInfo: currentExecutionInfo,
-                         renderPassDescriptor: renderPassDescriptor,
-                         commandBuffer: commandBuffer)
-#if DEBUG
-            commandBuffer.popDebugGroup()
-#endif
+            try node.execute(renderer: self,
+                             executionInfo: currentExecutionInfo,
+                             renderPassDescriptor: renderPassDescriptor,
+                             commandBuffer: commandBuffer)
             node.markClean()
             feedbackCache.cacheProcessedNode(node, executionInfo: currentExecutionInfo)
         }
@@ -346,22 +344,22 @@ public class GraphRenderer : ViewRenderer
 
     // MARK: - On-demand graph evaluation (for exporters and subgraph callers)
 
-    public func executeAndDraw(graph: Graph, renderPassDescriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer)
+    public func executeAndDraw(graph: Graph, renderPassDescriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer) throws
     {
-        executeAndDraw(graph: graph, executionInfo: currentExecutionInfo, renderPassDescriptor: renderPassDescriptor, commandBuffer: commandBuffer)
+        try executeAndDraw(graph: graph, executionInfo: currentExecutionInfo, renderPassDescriptor: renderPassDescriptor, commandBuffer: commandBuffer)
     }
 
-    public func executeAndDraw(graph: Graph, executionInfo: GraphExecutionInfo, renderPassDescriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer)
+    public func executeAndDraw(graph: Graph, executionInfo: GraphExecutionInfo, renderPassDescriptor: MTLRenderPassDescriptor, commandBuffer: MTLCommandBuffer) throws
     {
         let needsSceneSync = graph.consumePendingConnectionSceneSync()
         if needsSceneSync {
             invalidateFeedbackTopologyCaches(for: graph)
         }
 
-        self.execute(graph: graph,
-                     executionInfo: executionInfo,
-                     renderPassDescriptor: renderPassDescriptor,
-                     commandBuffer: commandBuffer)
+        try self.execute(graph: graph,
+                         executionInfo: executionInfo,
+                         renderPassDescriptor: renderPassDescriptor,
+                         commandBuffer: commandBuffer)
 
         if needsSceneSync {
             graph.syncNodesToScene()
@@ -380,7 +378,7 @@ public class GraphRenderer : ViewRenderer
                         renderPassDescriptor: MTLRenderPassDescriptor,
                         commandBuffer: MTLCommandBuffer,
                         clearFlags: Bool = true,
-                        forceEvaluationForTheseNodes: [Node] = [])
+                        forceEvaluationForTheseNodes: [Node] = []) throws
     {
         self.resetTextureCaches(for: executionInfo)
 
@@ -401,14 +399,24 @@ public class GraphRenderer : ViewRenderer
             }
         }
 
+        var capturedError: (any Error)?
+
         let executeNode: (Node) -> Void = { node in
+            guard capturedError == nil else { return }
 #if DEBUG
             commandBuffer.pushDebugGroup(node.name)
 #endif
-            node.execute(renderer: self,
-                         executionInfo: executionInfo,
-                         renderPassDescriptor: renderPassDescriptor,
-                         commandBuffer: commandBuffer)
+            do
+            {
+                try node.execute(renderer: self,
+                                 executionInfo: executionInfo,
+                                 renderPassDescriptor: renderPassDescriptor,
+                                 commandBuffer: commandBuffer)
+            }
+            catch
+            {
+                capturedError = error
+            }
 #if DEBUG
             commandBuffer.popDebugGroup()
 #endif
@@ -433,6 +441,11 @@ public class GraphRenderer : ViewRenderer
         if !roots.isEmpty {
             self.currentCamera = firstCamera
         }
+
+        if let capturedError
+        {
+            throw capturedError
+        }
     }
 
     private func resetTextureCaches(for executionInfo: GraphExecutionInfo)
@@ -443,31 +456,31 @@ public class GraphRenderer : ViewRenderer
 
     // MARK: - Graph Execution Lifecycle
 
-    public func enableExecution(graph: Graph)
+    public func enableExecution(graph: Graph) throws
     {
         for node in graph.nodes {
-            node.enableExecution(renderer: self)
+            try node.enableExecution(renderer: self)
         }
     }
 
-    public func startExecution(graph: Graph)
+    public func startExecution(graph: Graph) throws
     {
         for node in graph.nodes {
-            node.startExecution(renderer: self)
+            try node.startExecution(renderer: self)
         }
     }
 
-    public func stopExecution(graph: Graph)
+    public func stopExecution(graph: Graph) throws
     {
         for node in graph.nodes {
-            node.stopExecution(renderer: self)
+            try node.stopExecution(renderer: self)
         }
     }
 
-    public func disableExecution(graph: Graph)
+    public func disableExecution(graph: Graph) throws
     {
         for node in graph.nodes {
-            node.disableExecution(renderer: self)
+            try node.disableExecution(renderer: self)
         }
         self.currentCamera = nil
     }
@@ -496,70 +509,96 @@ public class GraphRenderer : ViewRenderer
 
     // MARK: - Execution Helpers
 
-    public func newImage(withWidth width: Int, height: Int) -> FabricImage?
+    public func newImage(withWidth width: Int, height: Int) throws -> FabricImage
     {
-        return self.newImage(withWidth: width, height: height, format: self.colorPixelFormat)
+        return try self.newImage(withWidth: width, height: height, format: self.colorPixelFormat)
     }
 
-    public func newImage(withWidth width: Int, height: Int, format: MTLPixelFormat) -> FabricImage?
+    public func newImage(withWidth width: Int, height: Int, format: MTLPixelFormat) throws -> FabricImage
     {
-        return self.privateTextureCache.newManagedImage(width: width, height: height, pixelFormat: format)
+        if let image = self.privateTextureCache.newManagedImage(width: width, height: height, pixelFormat: format)
             ?? self.newImageDirect(withWidth: width, height: height, format: format)
+        {
+            return image
+        }
+
+        throw FabricError(.execution(.outOfMemory),
+                          severity: .recoverable,
+                          message: "Could not allocate image: \(width)x\(height), \(format)")
     }
 
     public func newImage(withWidth width: Int,
                          height: Int,
                          format: MTLPixelFormat,
-                         mipmapped: Bool) -> FabricImage?
+                         mipmapped: Bool) throws -> FabricImage
     {
         guard mipmapped else {
-            return newImage(withWidth: width, height: height, format: format)
+            return try newImage(withWidth: width, height: height, format: format)
         }
 
-        return privateTextureCache.newManagedImage(width: width,
-                                                   height: height,
-                                                   pixelFormat: format,
-                                                   mipmapped: true)
+        if let image = privateTextureCache.newManagedImage(width: width,
+                                                           height: height,
+                                                           pixelFormat: format,
+                                                           mipmapped: true)
             ?? newImageDirect(withWidth: width, height: height, format: format, mipmapped: true)
+        {
+            return image
+        }
+
+        throw FabricError(.execution(.outOfMemory),
+                          severity: .recoverable,
+                          message: "Could not allocate mipmapped image: \(width)x\(height), \(format)")
     }
 
-    public func newImage(fromPixelBuffer pixelBuffer: CVPixelBuffer) -> FabricImage?
+    public func newImage(fromPixelBuffer pixelBuffer: CVPixelBuffer) throws -> FabricImage
     {
-        var image:FabricImage?
+        let image: FabricImage
         
         if let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         {
-             image = self.newImage(fromSurface: surface)
+             image = try self.newImage(fromSurface: surface)
         }
         else
         {
-            image = newSharedImage(fromPixelBuffer: pixelBuffer)
+            image = try newSharedImage(fromPixelBuffer: pixelBuffer)
         }
         
-        image?.isFlipped = CVImageBufferIsFlipped(pixelBuffer)
+        image.isFlipped = CVImageBufferIsFlipped(pixelBuffer)
         
         return image
     }
 
     // MARK: - Private Image Helpers
 
-    private func newSharedImage(fromPixelBuffer pixelBuffer: CVPixelBuffer) -> FabricImage?
+    private func newSharedImage(fromPixelBuffer pixelBuffer: CVPixelBuffer) throws -> FabricImage
     {
         guard let format = self.metalPixelFormatForOSType(format: CVPixelBufferGetPixelFormatType(pixelBuffer))
-        else { return nil }
+        else {
+            throw FabricError(.general(.unsupported),
+                              severity: .recoverable,
+                              message: "Unsupported pixel buffer format: \(CVPixelBufferGetPixelFormatType(pixelBuffer))")
+        }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
         guard let image = self.sharedTextureCache.newManagedImage(width: width, height: height, pixelFormat: format)
-        else { return nil }
+        else {
+            throw FabricError(.execution(.outOfMemory),
+                              severity: .recoverable,
+                              message: "Could not allocate shared image from pixel buffer: \(width)x\(height), \(format)")
+        }
 
         let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
 
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        guard let baseAddr = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+        guard let baseAddr = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw FabricError(.execution(.failed),
+                              severity: .recoverable,
+                              message: "Could not read pixel buffer base address")
+        }
 
         let region = MTLRegionMake3D(0, 0, 0, width, height, 1)
         image.texture.replace(region: region, mipmapLevel: 0, withBytes: baseAddr, bytesPerRow: bpr)
@@ -568,7 +607,7 @@ public class GraphRenderer : ViewRenderer
         return image
     }
 
-    private func newImage(fromSurface surface: IOSurface) -> FabricImage?
+    private func newImage(fromSurface surface: IOSurface) throws -> FabricImage
     {
         let descriptor = self.metalTextureDescriptorForIOSurface(surface: surface)
 
@@ -580,7 +619,10 @@ public class GraphRenderer : ViewRenderer
                 IOSurfaceDecrementUseCount(surface)
             }
         }
-        return nil
+
+        throw FabricError(.execution(.outOfMemory),
+                          severity: .recoverable,
+                          message: "Could not allocate image from IOSurface")
     }
 
     private func metalTextureDescriptorForIOSurface(surface: IOSurfaceRef) -> MTLTextureDescriptor?
