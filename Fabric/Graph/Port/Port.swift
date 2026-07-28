@@ -105,6 +105,16 @@ extension UTType
     internal func snapshotValue() -> PortValue? { nil }
     internal func restoreValue(from boxed: PortValue?) { }
 
+    /// Returns a read-only boxed copy of the port's current value.
+    ///
+    /// Reference-backed values such as Image, Geometry, and Material remain
+    /// references. External observers should inspect them synchronously and
+    /// copy only immutable metadata before leaving the execution callback.
+    public func currentPortValue() -> PortValue?
+    {
+        snapshotValue()
+    }
+
     /// Unboxes `boxed` into the port's native type and propagates to connected inlets via `send`.
     /// Use this to deliver a PortValue through a port whose concrete type is only known at runtime.
     internal func sendBoxed(_ boxed: PortValue?) { }
