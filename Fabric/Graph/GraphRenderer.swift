@@ -41,6 +41,8 @@ public class GraphRenderer : ViewRenderer
     // Pre-sorted node list built in update(), consumed in draw()
     private var scheduledNodes: [Node] = []
     private var pendingSceneSync = false
+    private var executionObservers:
+        [ObjectIdentifier: WeakGraphExecutionObserver] = [:]
 
     // One feedback cache per graph/subgraph UUID to handle different execution cadences
     private var feedbackCaches: [UUID: GraphRendererFeedbackCache] = [:]
@@ -164,6 +166,12 @@ public class GraphRenderer : ViewRenderer
 
         currentCamera = graph.firstCamera ?? defaultCamera
         executionCount += 1
+
+        notifyExecutionObservers(
+            graph: graph,
+            executionInfo: currentExecutionInfo,
+            executedNodes: scheduledNodes
+        )
     }
 
     // MARK: - Graph Analysis (update phase)
@@ -400,6 +408,13 @@ public class GraphRenderer : ViewRenderer
         }
 
         var capturedError: (any Error)?
+        let shouldCaptureExecutedNodes = !executionObservers.isEmpty
+        var executedNodes: [Node] = []
+
+        if shouldCaptureExecutedNodes
+        {
+            executedNodes.reserveCapacity(graph.nodes.count)
+        }
 
         let executeNode: (Node) -> Void = { node in
             guard capturedError == nil else { return }
@@ -424,6 +439,11 @@ public class GraphRenderer : ViewRenderer
             if clearFlags {
                 node.markClean()
             }
+
+            if shouldCaptureExecutedNodes
+            {
+                executedNodes.append(node)
+            }
         }
 
         let roots = evaluationRoots(for: graph, forcing: forceEvaluationForTheseNodes)
@@ -445,6 +465,72 @@ public class GraphRenderer : ViewRenderer
         if let capturedError
         {
             throw capturedError
+        }
+
+        notifyExecutionObservers(
+            graph: graph,
+            executionInfo: executionInfo,
+            executedNodes: executedNodes
+        )
+    }
+
+    // MARK: - Execution Observation
+
+    /// Registers an observer without retaining it.
+    ///
+    /// Register and remove observers on the same thread used to drive this
+    /// renderer's execution lifecycle.
+    public func addExecutionObserver(_ observer: any GraphExecutionObserver)
+    {
+        executionObservers[ObjectIdentifier(observer)] =
+            WeakGraphExecutionObserver(observer: observer)
+    }
+
+    public func removeExecutionObserver(_ observer: any GraphExecutionObserver)
+    {
+        executionObservers.removeValue(forKey: ObjectIdentifier(observer))
+    }
+
+    private func notifyExecutionObservers(
+        graph: Graph,
+        executionInfo: GraphExecutionInfo,
+        executedNodes: [Node]
+    )
+    {
+        guard !executionObservers.isEmpty
+        else
+        {
+            return
+        }
+
+        var liveObservers: [any GraphExecutionObserver] = []
+        var releasedObserverIDs: [ObjectIdentifier] = []
+
+        for (observerID, observerBox) in executionObservers
+        {
+            guard let observer = observerBox.observer
+            else
+            {
+                releasedObserverIDs.append(observerID)
+                continue
+            }
+
+            liveObservers.append(observer)
+        }
+
+        for observerID in releasedObserverIDs
+        {
+            executionObservers.removeValue(forKey: observerID)
+        }
+
+        for observer in liveObservers
+        {
+            observer.graphRenderer(
+                self,
+                didCompleteExecutionOf: graph,
+                executionInfo: executionInfo,
+                executedNodes: executedNodes
+            )
         }
     }
 
