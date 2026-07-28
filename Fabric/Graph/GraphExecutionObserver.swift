@@ -2,8 +2,6 @@
 //  GraphExecutionObserver.swift
 //  Fabric
 //
-//  Created by Codex on 7/28/26.
-//
 
 import Foundation
 
