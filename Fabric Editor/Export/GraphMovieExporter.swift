@@ -273,7 +273,10 @@ final class GraphMovieExporter {
         let graphData = try encoder.encode(self.graph)
 
         let decoder = JSONDecoder()
-        decoder.context = DecoderContext(documentContext: self.context)
+        decoder.context = DecoderContext(
+            documentContext: self.context,
+            fileReferenceBaseURL: self.graph.fileReferenceBaseURL
+        )
         return try decoder.decode(Graph.self, from: graphData)
     }
 
